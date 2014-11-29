@@ -1,0 +1,313 @@
+package com.smanzana.bridge;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.util.HashSet;
+import java.util.Map;
+
+import com.smanzana.Project3.Frame.Frame;
+import com.smanzana.Project3.Utils.CircularList;
+
+/**
+ * Java version of the bridge. This runs separately than the rings, and connects to bridge nodes within
+ * the rings. It handles all the routing of frames.
+ * <p>[Dependencies: Project 3]</p>
+ * @author Skyler
+ *
+ */
+public class Bridge {
+	
+	/**
+	 * Table that stores addresses to a unique ID for each LAN the bridge is connected to
+	 */
+	private Map<Byte, Integer> lookupTable;
+	
+	/**
+	 * A table that maps between a unique LAN id and the socket used to implement it.
+	 */
+	private Map<Integer, Socket> nodeTable;
+	
+	/**
+	 * A list of all registered input sockets
+	 */
+	private CircularList<Socket> inputList;
+	
+	
+	
+	public static void main(String[] args) {
+		// TODO Auto-generated method stub
+
+	}
+	
+	/**
+	 * Uses our two lookup tables to get the socket (LAN) associated with the address. <br />
+	 * @param address The address we are trying to route to. 
+	 * @return The socket that should be used to get to the desired address, or null if the LAN isn't registered or error occurs.
+	 */
+	private Socket getSocket(Byte address) {
+		Socket sock = null;
+		Integer id;
+		
+		id = lookupTable.get(address);
+		if (id == null) {
+			return null;
+		}
+		
+		sock = nodeTable.get(id);
+		
+		return sock; //socket or null.
+	}
+	
+	/**
+	 * Fetches and processes input.
+	 * <p>Care is given not to starve any input sockets (queues) using a {@link com.smanzana.Project3.Utils.CircularList CircularList}.
+	 * </p>
+	 * @throws IOException Error occurs when trying to fetch an input stream
+	 */
+	private void nextInput() throws IOException {
+		if (inputList == null) {
+			System.out.println("Invalid call to nextInput in bridge! List is null!");
+			return;
+		}
+		
+		if (inputList.isEmpty()) {
+			return;
+		}
+		
+		Socket sock = null;
+		
+		//Prepare yourself for some magic.
+		//We use a for loop that goes up to <i>size</i> times. It doesn't care what the current index of
+		//out list is. That's all handled in the CircularList class. Instead, we just call 'next' up to
+		//<i>size</i> times looking for a socket with a frame ready to process. This will stop us from
+		//looping infinitely until we get a frame!
+		for (int i = 0; i < inputList.size(); i++) {
+			sock = inputList.next();
+			if (sock.getInputStream().available() < Frame.headerLength) {
+				//not ready to be looked at, so move on
+				sock = null;
+				continue;
+			}
+			
+			//have input ready to be processed!
+			break;
+		}
+		
+		if (sock == null) {
+			//went through the whole list once and didn't get any available input;
+			return;
+		}
+		
+		byte[] frame = getFrame(sock);
+		processFrame(sock, frame);
+		
+	}
+	
+	/**
+	 * Fetches a complete frame from the passed socket.<br />
+	 * Frame is going to be complete, or null. No partial frames will be passed unless the header is corrupt.
+	 * @param sock The socket to fetch the frame from.
+	 * @return a byte array containing exactly the whole frame, or null on error
+	 * @throws IOException Unable to get input stream
+	 */
+	private byte[] getFrame(Socket sock) throws IOException {
+		if (sock == null) {
+			System.out.println("Tried to get frame from a null socekt!!!");
+			return null;
+		}
+		
+		InputStream input = sock.getInputStream();
+		
+		if (input.available() < Frame.headerLength) {
+			System.out.println("Trying to get a frame from an un-ready socket!"); //this is tested against above, but just to be sure
+			return null;
+		}
+		
+		byte[] header = receive(input, Frame.headerLength);
+		byte[] body = receive(input, Frame.Header.getSize(header) + 1, 200 + (Frame.Header.getSize(header) * 20));
+		
+		byte[] frame = new byte[header.length + body.length];
+		
+		int i;
+		for (i = 0; i < header.length; i++) {
+			frame[i] = header[i];
+		}
+		for (; i < frame.length; i++) {
+			frame[i] = body[i - header.length];
+		}
+		
+		return frame;
+	}
+	
+	
+	private void processFrame(Socket returnSocket, byte[] frame) throws IOException {
+		if (frame == null) {
+			System.out.println("Tried to process a null frame in the bridge!");
+			return;
+		}
+		
+		if (checkFrame(frame)) {
+			//we have a bad frame!
+			System.out.println("Bridge has detected a bad frame!");
+			return;
+		}
+		
+		//First special check: is it a token?
+		if (Frame.Header.isToken(Frame.getHeader(frame))) {
+			//we got a token. Pass it back to the LAN it came from
+			send(returnSocket, frame);
+		}
+		
+		//Second special check: Did we (or a monitor) send it? Is it a command frame? Is it routing table info?
+		if (Frame.Header.getSource(Frame.getHeader(frame)) == 0) {
+			//for now, just drain it. 
+			//TODO figure out what the monitor is saying
+			//TODO remove dead nodes from our lookup table
+			//drain it by not retransmitting it
+			return;
+		}
+		
+		
+		Byte address = Frame.Header.getDestination(Frame.getHeader(frame));
+		Socket output = getSocket(address);
+		
+		if (output == null) {
+			//not in lookup table!
+			//fluuuuuuudddddddddddddd
+			flood(frame);
+		}
+		else {
+			send(output, frame);
+		}
+		
+	}
+	
+	/**
+	 * Tries to get <i>size</i> bytes from the passed input stream.<br />
+	 * This implementation has no timeout, and will hang forever until it gets the required number of bytes!
+	 * @param input The input stream to receive from
+	 * @param size how many bytes are to be read
+	 * @return a newly-created array list containing the next <i>size</i> bytes from the stream
+	 * @throws IOException Error occurs while interacting with the input stream.
+	 */
+	private byte[] receive(InputStream input, int size) throws IOException {
+		
+		byte[] data = new byte[size];
+		
+		while (input.available() < size) {
+			try {
+				wait(10); //to avoid trying every single cycle, sleep a few milliseconds and then try again
+			} catch (InterruptedException e) {
+				//Do nothing. An interupted thread is an interupted thread. WE are sleeping to waste time so this doesn't matter.
+				//at least how I understand it.
+			}
+		}
+		
+		try {
+			input.read(data);
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.out.println("Error when trying to read data from socket! ERR50");
+			return null;
+		}
+		
+		
+		return data;
+	}
+	
+	/**
+	 * Tries to get <i>size</i> bytes from the passed input stream.<br />
+	 * At most, this method will wait <i>timeout</i> milliseconds before timing out. If a timeout occurs,
+	 * null is returned.<br />
+	 * <p>It is worth mentioning that the timeout is handled in 10-millisecond steps. If the passed timeout is not a multiple
+	 * of 10 milliseconds, it will be effectively rounded up to the next multiple of 10. The timeout is handled this way for
+	 * efficiency in assesing the input stream status and to ease the strain caused by this thread. The thread sleeps inbetween
+	 * every 10 millisecond period.</p>
+	 * @param input The input stream to receive from
+	 * @param size how many bytes are to be read
+	 * @param timeout how many miliseconds to wait before issuing a time out
+	 * @return a newly-created array list containing the next <i>size</i> bytes from the stream, or null on timeout
+	 * @throws IOException Error occurs while interacting with the input stream.
+	 */
+	private byte[] receive(InputStream input, int size, int timeout) throws IOException {
+		byte[] data = new byte[size];
+		int sleepCount = 0;
+		
+		while (input.available() < size) {
+			try {
+				wait(10); //to avoid trying every single cycle, sleep a few milliseconds and then try again
+				//We have a timeout to keep in mind. We have to keep how long we've been sleeping and check it each time
+				sleepCount++;
+				if (sleepCount >= (timeout) / 10) {
+					break; //if we've slept past our timeout, break;
+				}
+			} catch (InterruptedException e) {
+				//Do nothing. An interupted thread is an interupted thread. WE are sleeping to waste time so this doesn't matter.
+				//at least how I understand it.
+			}
+		}
+		
+		//check for timeout
+		if (input.available() < size) {
+			System.out.println("Timed out when bridge tried to receive a frame!");
+			return null;
+		}
+		
+		try {
+			input.read(data);
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.out.println("Error when trying to read data from socket! ERR50");
+			return null;
+		}
+		
+		
+		return data;
+	}
+	
+	/**
+	 * Sends the passed frame over the passed socket.
+	 * @param output What socket to send the frame through
+	 * @param frame What frame to send through the socket :D
+	 * @throws IOException Error when trying to use the output stream of the socket
+	 */
+	private void send(Socket output, byte[] frame) throws IOException {
+		if (output == null || frame == null) {
+			System.out.println("Tried to send null frame on null socket!");
+			return;
+		}
+		
+		OutputStream out = output.getOutputStream();
+		
+		out.write(frame);
+		out.flush();
+	}
+	
+	/**
+	 * Floods the passed frame to all registered output sockets.<br />
+	 * Output sockets are determined by creating a {@link java.util.Set Set} of the values of the nodeTable
+	 * @param frame The complete frame to flood to all LANS
+	 * @throws IOException Exception caused when fetching output streams of the sockets
+	 */
+	private void flood(byte[] frame) throws IOException {
+		//we want to send once to each LAN, not multiple times. So, get a set of all output sockets.
+		//sets enforce that an element only exists once
+		HashSet<Socket> set = new HashSet<Socket>(nodeTable.values());
+		for (Socket s : set) {
+			send(s, frame);
+		}
+	}
+	
+	private boolean checkFrame(byte[] frame) {
+		return false;
+		/*
+		 * I don't really know how to detect a bad frame. I had this problem in Project 2 :(
+		 * Since we're using byte data with no delimiters, it's hard to tell if the header or body is screwed up.
+		 * Even if something essential like the SIZE portion of the header is messed up, we wouldn't really know. We would
+		 * just MAYBE end up timing out when trying to get the body. Otherwise, we'd accept too little bytes or take part of
+		 * the next frame header as our body. :( Right?
+		 */
+	}
+}
