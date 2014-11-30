@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.util.HashMap;
 import java.util.Map;
 
 import com.smanzana.Project3.Frame.Frame;
@@ -17,7 +18,7 @@ import com.smanzana.Project3.Utils.CircularList;
  * @author Skyler
  *
  */
-public class Bridge {
+public class Bridge extends Thread {
 	
 	/**
 	 * Table that maps addresses to sockets (LANS)
@@ -32,12 +33,15 @@ public class Bridge {
 	
 	
 	public static void main(String[] args) {
-		System.out.println("Bridge initializing...");
 		if (args.length == 0) {
 			usage();
 			return;
 		}
-		
+
+		System.out.println("Bridge initializing...");		
+		Bridge bridge = new Bridge();
+
+		System.out.println("Creating connections...");
 		int port;
 		for (String arg : args) {
 			try {
@@ -47,10 +51,17 @@ public class Bridge {
 				System.out.println("Error when parsing port: " + arg);
 				return;
 			}
-			
-			connect(port);
-			
+
+			System.out.print("connecting on port " + port + "...     ");
+			if (!bridge.connect(port)) {
+				//error!
+				return;
+			}
+			System.out.println("done!");
 		}
+
+		System.out.println("Bridge initialized!");
+		bridge.start();
 		
 	}
 	
@@ -62,23 +73,49 @@ public class Bridge {
 		System.out.println("java -jar bridge.jar port1 [port2] [port3] [...]");
 	}
 	
-	private static void connect(int port) {
+	
+	
+	
+	
+	public Bridge() {
+		
+		lookupTable = new HashMap<Byte, Socket>();
+		socketList = new CircularList<Socket>();		
+	}
+	
+	@Override
+	public void run() {
 		try {
-			Socket sock = new Socket("127.0.0.1", port);
+			nextInput();
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.out.println("Encountered an IO Exception when trying to fetch/process input!");
+		}
+	}
+	
+	protected boolean connect(int port) {
+		Socket sock;
+		
+		try {
+			sock = new Socket("127.0.0.1", port);
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
-			return;
+			System.out.println("Encountered an Unknown Host Exception!");
+			return false;
 		} catch (IOException e) {
 			e.printStackTrace();
 			System.out.println("Error when trying to connect on port " + port);
-			return;
+			return false;
 		}
 		
 		//everything went okay?
 		
 		//add socket to our list of sockets
+		if (sock != null) { //just incase
+			socketList.add(sock);
+		}
 		
-		
+		return true;
 	}
 	
 	/**
@@ -88,12 +125,12 @@ public class Bridge {
 	 * @throws IOException Error occurs when trying to fetch an input stream
 	 */
 	private void nextInput() throws IOException {
-		if (SocketList == null) {
+		if (socketList == null) {
 			System.out.println("Invalid call to nextInput in bridge! List is null!");
 			return;
 		}
 		
-		if (SocketList.isEmpty()) {
+		if (socketList.isEmpty()) {
 			return;
 		}
 		
@@ -104,8 +141,8 @@ public class Bridge {
 		//out list is. That's all handled in the CircularList class. Instead, we just call 'next' up to
 		//<i>size</i> times looking for a socket with a frame ready to process. This will stop us from
 		//looping infinitely until we get a frame!
-		for (int i = 0; i < SocketList.size(); i++) {
-			sock = SocketList.next();
+		for (int i = 0; i < socketList.size(); i++) {
+			sock = socketList.next();
 			if (sock.getInputStream().available() < Frame.headerLength) {
 				//not ready to be looked at, so move on
 				sock = null;
@@ -334,8 +371,8 @@ public class Bridge {
 	 * @throws IOException Exception caused when fetching output streams of the sockets
 	 */
 	private void flood(byte[] frame) throws IOException {
-		for (int i = 0; i < SocketList.size(); i++) {
-			send(SocketList.next(), frame);
+		for (int i = 0; i < socketList.size(); i++) {
+			send(socketList.next(), frame);
 		}
 		//go through socket list once complete time so we don't mess up our index. Send frame on each socket.
 	}
