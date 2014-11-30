@@ -25,9 +25,9 @@ public class Bridge {
 	private Map<Byte, Socket> lookupTable;
 	
 	/**
-	 * A list of all registered input sockets
+	 * A list of all registered sockets
 	 */
-	private CircularList<Socket> SocketList;
+	private CircularList<Socket> socketList;
 	
 	
 	
