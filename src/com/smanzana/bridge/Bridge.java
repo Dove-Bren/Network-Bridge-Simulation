@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
-import java.util.HashSet;
 import java.util.Map;
 
 import com.smanzana.Project3.Frame.Frame;
@@ -28,7 +27,7 @@ public class Bridge {
 	/**
 	 * A list of all registered input sockets
 	 */
-	private CircularList<Socket> inputList;
+	private CircularList<Socket> SocketList;
 	
 	
 	
@@ -89,12 +88,12 @@ public class Bridge {
 	 * @throws IOException Error occurs when trying to fetch an input stream
 	 */
 	private void nextInput() throws IOException {
-		if (inputList == null) {
+		if (SocketList == null) {
 			System.out.println("Invalid call to nextInput in bridge! List is null!");
 			return;
 		}
 		
-		if (inputList.isEmpty()) {
+		if (SocketList.isEmpty()) {
 			return;
 		}
 		
@@ -105,8 +104,8 @@ public class Bridge {
 		//out list is. That's all handled in the CircularList class. Instead, we just call 'next' up to
 		//<i>size</i> times looking for a socket with a frame ready to process. This will stop us from
 		//looping infinitely until we get a frame!
-		for (int i = 0; i < inputList.size(); i++) {
-			sock = inputList.next();
+		for (int i = 0; i < SocketList.size(); i++) {
+			sock = SocketList.next();
 			if (sock.getInputStream().available() < Frame.headerLength) {
 				//not ready to be looked at, so move on
 				sock = null;
@@ -335,8 +334,8 @@ public class Bridge {
 	 * @throws IOException Exception caused when fetching output streams of the sockets
 	 */
 	private void flood(byte[] frame) throws IOException {
-		for (int i = 0; i < inputList.size(); i++) {
-			send(inputList.next(), frame);
+		for (int i = 0; i < SocketList.size(); i++) {
+			send(SocketList.next(), frame);
 		}
 		//go through socket list once complete time so we don't mess up our index. Send frame on each socket.
 	}
