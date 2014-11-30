@@ -13,21 +13,16 @@ import com.smanzana.Project3.Utils.CircularList;
 /**
  * Java version of the bridge. This runs separately than the rings, and connects to bridge nodes within
  * the rings. It handles all the routing of frames.
- * <p>[Dependencies: Project 3]</p>
+ * <p><b>[Dependencies: Project3]</b></p>
  * @author Skyler
  *
  */
 public class Bridge {
 	
 	/**
-	 * Table that stores addresses to a unique ID for each LAN the bridge is connected to
+	 * Table that maps addresses to sockets (LANS)
 	 */
-	private Map<Byte, Integer> lookupTable;
-	
-	/**
-	 * A table that maps between a unique LAN id and the socket used to implement it.
-	 */
-	private Map<Integer, Socket> nodeTable;
+	private Map<Byte, Socket> lookupTable;
 	
 	/**
 	 * A list of all registered input sockets
@@ -39,25 +34,6 @@ public class Bridge {
 	public static void main(String[] args) {
 		// TODO Auto-generated method stub
 
-	}
-	
-	/**
-	 * Uses our two lookup tables to get the socket (LAN) associated with the address. <br />
-	 * @param address The address we are trying to route to. 
-	 * @return The socket that should be used to get to the desired address, or null if the LAN isn't registered or error occurs.
-	 */
-	private Socket getSocket(Byte address) {
-		Socket sock = null;
-		Integer id;
-		
-		id = lookupTable.get(address);
-		if (id == null) {
-			return null;
-		}
-		
-		sock = nodeTable.get(id);
-		
-		return sock; //socket or null.
 	}
 	
 	/**
@@ -169,13 +145,19 @@ public class Bridge {
 			return;
 		}
 		
+		//Done with the special checks. We know it isn't a control frame. Instead we just route it and make sure the
+		//source is in our routing table
+		updateRoutingTable(returnSocket, frame);
+		
 		
 		Byte address = Frame.Header.getDestination(Frame.getHeader(frame));
-		Socket output = getSocket(address);
+		Socket output = lookupTable.get(address);
 		
 		if (output == null) {
 			//not in lookup table!
 			//fluuuuuuudddddddddddddd
+			//we don't need to do anything special, as the ack that the node sends back will be used to update
+			//our routing table
 			flood(frame);
 		}
 		else {
@@ -294,7 +276,7 @@ public class Bridge {
 	private void flood(byte[] frame) throws IOException {
 		//we want to send once to each LAN, not multiple times. So, get a set of all output sockets.
 		//sets enforce that an element only exists once
-		HashSet<Socket> set = new HashSet<Socket>(nodeTable.values());
+		HashSet<Socket> set = new HashSet<Socket>(lookupTable.values());
 		for (Socket s : set) {
 			send(s, frame);
 		}
@@ -309,5 +291,22 @@ public class Bridge {
 		 * just MAYBE end up timing out when trying to get the body. Otherwise, we'd accept too little bytes or take part of
 		 * the next frame header as our body. :( Right?
 		 */
+	}
+	
+	private void updateRoutingTable(Socket sock, byte[] frame) {
+		if (sock == null || frame == null) {
+			return;
+		}
+		
+		Byte address = Frame.Header.getSource(Frame.getHeader(frame));
+
+		//check if we already have the address registered
+		if (lookupTable.containsKey(address)) {
+			//TODO what if the address is coming from a new socket??
+			return;
+		}
+		
+		//address not registered!
+		lookupTable.put(address,  sock);
 	}
 }
