@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.HashSet;
 import java.util.Map;
 
@@ -32,8 +33,53 @@ public class Bridge {
 	
 	
 	public static void main(String[] args) {
-		// TODO Auto-generated method stub
-
+		System.out.println("Bridge initializing...");
+		if (args.length == 0) {
+			usage();
+			return;
+		}
+		
+		int port;
+		for (String arg : args) {
+			try {
+				port = Integer.parseInt(arg);
+			} catch (NumberFormatException e) {
+				e.printStackTrace();
+				System.out.println("Error when parsing port: " + arg);
+				return;
+			}
+			
+			connect(port);
+			
+		}
+		
+	}
+	
+	/**
+	 * Prints out the proper command-line call used to create the bridge
+	 */
+	private static void usage() {
+		System.out.println("Usage:");
+		System.out.println("java -jar bridge.jar port1 [port2] [port3] [...]");
+	}
+	
+	private static void connect(int port) {
+		try {
+			Socket sock = new Socket("127.0.0.1", port);
+		} catch (UnknownHostException e) {
+			e.printStackTrace();
+			return;
+		} catch (IOException e) {
+			e.printStackTrace();
+			System.out.println("Error when trying to connect on port " + port);
+			return;
+		}
+		
+		//everything went okay?
+		
+		//add socket to our list of sockets
+		
+		
 	}
 	
 	/**
@@ -153,6 +199,19 @@ public class Bridge {
 		Byte address = Frame.Header.getDestination(Frame.getHeader(frame));
 		Socket output = lookupTable.get(address);
 		
+		//last check: are we going to move this frame across LANs? If so:
+		//is it an ack? We send out fake ones, so we drain those
+		//do we need to send a fake ack?
+		if (output == null || returnSocket != output) {
+			if (Frame.getFrameStatus(frame) != 0) {
+				//FS other than 0 means this is an ack (or NAK) frame coming back. Drain it.
+				return;
+				//TODO what if it gets rejected?!!?!?!?!
+			}
+			//This is the original frame, so generate a fake ACK for the sender
+			ack(returnSocket, frame);
+		}
+		
 		if (output == null) {
 			//not in lookup table!
 			//fluuuuuuudddddddddddddd
@@ -163,6 +222,8 @@ public class Bridge {
 		else {
 			send(output, frame);
 		}
+		
+		
 		
 	}
 	
@@ -274,14 +335,17 @@ public class Bridge {
 	 * @throws IOException Exception caused when fetching output streams of the sockets
 	 */
 	private void flood(byte[] frame) throws IOException {
-		//we want to send once to each LAN, not multiple times. So, get a set of all output sockets.
-		//sets enforce that an element only exists once
-		HashSet<Socket> set = new HashSet<Socket>(lookupTable.values());
-		for (Socket s : set) {
-			send(s, frame);
+		for (int i = 0; i < inputList.size(); i++) {
+			send(inputList.next(), frame);
 		}
+		//go through socket list once complete time so we don't mess up our index. Send frame on each socket.
 	}
 	
+	/**
+	 * Checks to make sure the frame is in a valid format
+	 * @param frame
+	 * @return
+	 */
 	private boolean checkFrame(byte[] frame) {
 		return false;
 		/*
@@ -293,6 +357,14 @@ public class Bridge {
 		 */
 	}
 	
+	/**
+	 * Checks to make sure that the routing table currently associates the source-address of the frame with the
+	 * socket it came from.<br />
+	 * This currently only checks against the address key already existing in the map. If the frame came from a socket that
+	 * is different than its registered socket, nothing will change.
+	 * @param sock
+	 * @param frame
+	 */
 	private void updateRoutingTable(Socket sock, byte[] frame) {
 		if (sock == null || frame == null) {
 			return;
@@ -308,5 +380,18 @@ public class Bridge {
 		
 		//address not registered!
 		lookupTable.put(address,  sock);
+	}
+	
+	/**
+	 * Sends an acknowledgment frame back to the source of the passed frame through the passed socket.
+	 * @param sock The socket that the frame came through originally
+	 * @param frame The frame
+	 * @throws IOException If error occurs when trying to send the frame (see {@link #send(Socket, byte[]) send()})
+	 */
+	private void ack(Socket sock, byte[] frame) throws IOException {
+		//an acknowledgment frame is the same frame with the FS byte changed to 2 -- accepted.
+		byte[] ackFrame = frame.clone(); //if we don't clone, we'll change the frame!!!
+		ackFrame[ackFrame.length - 1] = 2;
+		send(sock, ackFrame);
 	}
 }
