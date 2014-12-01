@@ -6,9 +6,12 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 
 import com.smanzana.Project3.Frame.Frame;
+import com.smanzana.Project3.Node.Bridge.STDMessage;
 import com.smanzana.Project3.Utils.CircularList;
 
 /**
@@ -29,6 +32,12 @@ public class Bridge extends Thread {
 	 * A list of all registered sockets
 	 */
 	private CircularList<Socket> socketList;
+	
+	/**
+	 * Keeps track of all active LANS (the sockets to them).<br />
+	 * When this is empty, we know that all lans are inactive and we can kill.
+	 */
+	private List<Socket> activeRings;
 	
 	
 	
@@ -80,7 +89,8 @@ public class Bridge extends Thread {
 	public Bridge() {
 		
 		lookupTable = new HashMap<Byte, Socket>();
-		socketList = new CircularList<Socket>();		
+		socketList = new CircularList<Socket>();
+		activeRings = new LinkedList<Socket>();
 	}
 	
 	@Override
@@ -113,10 +123,42 @@ public class Bridge extends Thread {
 		//add socket to our list of sockets
 		if (sock != null) { //just incase
 			socketList.add(sock);
+			activeRings.add(sock);
 		}
 		
 		return true;
 	}
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	/*
+	 * TODO: Finish implementing the activeRings list:
+	 * 			Check if it's empty when we get a FINISH message
+	 * TODO: Check if messages from source 0 are bridge messages, and deal with them
+	 */
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
 	
 	/**
 	 * Fetches and processes input.
@@ -218,8 +260,25 @@ public class Bridge extends Thread {
 			send(returnSocket, frame);
 		}
 		
-		//Second special check: Did we (or a monitor) send it? Is it a command frame? Is it routing table info?
+		//Second special check: Did we (or a monitor) send it? Is it a command frame? Is it from a embedded-bridge?
 		if (Frame.Header.getSource(Frame.getHeader(frame)) == 0) {
+			//Check for a bridge frame from an embedded bridge
+			byte[] data = Frame.getData(frame);
+			if (data.length == 1) {
+				/**
+				 * frame from source 0 with size of 1. Assume it's an inter-bridge communication message
+				 * (see {@link com.smanzana.Project3.Node.Bridge Bridge}
+				 */
+				STDMessage msg = com.smanzana.Project3.Node.Bridge.STDMessage.fromId(data[0]);
+				switch (msg) {
+				case FINISH:
+					activeRings.remove(returnSocket); //remove that socket from the list of active rings, if it's there
+					break;
+				}
+				return;
+			}
+			
+			
 			//for now, just drain it. 
 			//TODO figure out what the monitor is saying
 			//TODO remove dead nodes from our lookup table
