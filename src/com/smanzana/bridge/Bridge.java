@@ -272,7 +272,13 @@ public class Bridge extends Thread {
 				STDMessage msg = com.smanzana.Project3.Node.Bridge.STDMessage.fromId(data[0]);
 				switch (msg) {
 				case FINISH:
+				default:
 					activeRings.remove(returnSocket); //remove that socket from the list of active rings, if it's there
+					if (activeRings.isEmpty()) {
+						//close down the rings
+						byte[] killFrame = assembleFrame(STDMessage.KILL);
+						flood(killFrame);
+					}
 					break;
 				}
 				return;
@@ -488,5 +494,11 @@ public class Bridge extends Thread {
 		byte[] ackFrame = frame.clone(); //if we don't clone, we'll change the frame!!!
 		ackFrame[ackFrame.length - 1] = 2;
 		send(sock, ackFrame);
+	}
+	
+	private byte[] assembleFrame(STDMessage msg) {
+		
+		
+		return null;
 	}
 }
