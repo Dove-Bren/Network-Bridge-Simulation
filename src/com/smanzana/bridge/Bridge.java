@@ -1,14 +1,19 @@
 package com.smanzana.bridge;
 
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.UnknownHostException;
+import java.net.SocketAddress;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 
 import com.smanzana.Project3.Frame.Frame;
 import com.smanzana.Project3.Node.Bridge.STDMessage;
@@ -21,23 +26,66 @@ import com.smanzana.Project3.Utils.CircularList;
  * @author Skyler
  *
  */
-public class Bridge extends Thread {
+public class Bridge {
+	
+	private static class EmbeddedBridge {
+		
+		/**
+		 * Keeps track of which socket is used to received data from the embedded bridge node
+		 */
+		private Socket inputSocket;
+		
+		/**
+		 * The socket that we use to send data to the bridge.
+		 */
+		private Socket outputSocket;
+		
+		public EmbeddedBridge(Socket in, Socket out) {
+			this.inputSocket = in;
+			this.outputSocket = out;
+		}
+		
+//		public boolean contains(Socket sock) {
+//			SocketAddress addr = sock.getRemoteSocketAddress();
+//			if (addr.equals(inputSocket.getRemoteSocketAddress()) || addr.equals(outputSocket.getRemoteSocketAddress())) {
+//				return true;
+//			}
+//			return false;
+//		}
+		
+		@Override
+		public String toString() {
+			return "Input: " + inputSocket.toString() + "\nOutput: " + outputSocket.toString() + "\n";
+		}
+	}
 	
 	/**
 	 * Table that maps addresses to sockets (LANS)
 	 */
-	private Map<Byte, Socket> lookupTable;
+	private Map<Byte, EmbeddedBridge> lookupTable;
 	
 	/**
-	 * A list of all registered sockets
+	 * A list of all embedded embeddedBridges we're still currently receiving from.
+	 * Bridges are removed from the list as they send in their FINISH frame
+	 * Once the list is empty, we know we can send the remote kill.
 	 */
-	private CircularList<Socket> socketList;
+	private CircularList<EmbeddedBridge> embeddedBridges;
 	
 	/**
-	 * Keeps track of all active LANS (the sockets to them).<br />
-	 * When this is empty, we know that all lans are inactive and we can kill.
+	 * A list of all known connected bridges. This list does not get modified, and is used when
+	 * doing extensive searching through the bridge's history.
 	 */
-	private List<Socket> activeRings;
+	private List<EmbeddedBridge> knownConnections;
+	
+//	/**
+//	 * Keeps track of all sockets used for output
+//	 */
+//	private List<Socket> outputSockets;
+	
+	/**
+	 * Private copy of what port this bridge will be listening on
+	 */
+	private static int myPort;
 	
 	
 	
@@ -46,28 +94,82 @@ public class Bridge extends Thread {
 			usage();
 			return;
 		}
-
-		System.out.println("Bridge initializing...");		
-		Bridge bridge = new Bridge();
-
-		System.out.println("Creating connections...");
-		int port;
-		for (String arg : args) {
-			try {
-				port = Integer.parseInt(arg);
-			} catch (NumberFormatException e) {
-				e.printStackTrace();
-				System.out.println("Error when parsing port: " + arg);
-				return;
-			}
-
-			System.out.print("connecting on port " + port + "...     ");
-			if (!bridge.connect(port)) {
-				//error!
-				return;
-			}
-			System.out.println("done!");
+		System.out.print("Loading config...");
+		myPort = parseConfig(args[0]);
+		if (myPort == -1) {
+			System.out.println("Unable to find config file: " + args[0]);
+			return;
 		}
+		System.out.println(" done");	
+		
+		System.out.print("Bridge initializing...");		
+		Bridge bridge = new Bridge();
+		System.out.println(" done");	
+
+		System.out.println("Creating connections:");
+		int count = Integer.parseInt(args[1]);
+		
+		if (count <= 0) {
+			System.out.println("Invalid number of rings: " + count);
+			return;
+		}
+
+		Socket in, out;
+		ServerSocket sSock;
+		try {
+			sSock = new ServerSocket();
+			sSock.bind(new InetSocketAddress("127.0.0.1", myPort));
+		} catch (IOException e) {
+			System.out.println("Error encountered when creating and binding server socket!");
+			return;
+		}
+		
+		for (int i = 0; i < count; i++) {
+			try {
+				in = sSock.accept();
+				System.out.println("Got a connection!");
+				byte[] offset = new byte[1];
+				in.getInputStream().read(offset);
+				
+				//we got out offset. The port is actually 7000 + offset. Connect a socket to that address and we'll have
+				//enough to create an EmbeddedBridge
+				out = new Socket();
+				out.connect(new InetSocketAddress("127.0.0.1", 7000 + offset[0]));
+				
+				//we got in and out! Create our bridge!
+				EmbeddedBridge br = new EmbeddedBridge(in, out);
+				
+				//register our new bridge
+				bridge.embeddedBridges.add(br);
+				bridge.knownConnections.add(br);
+			} catch (IOException e) {
+				
+			}
+		}
+		
+		try {
+			sSock.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+//		
+//		for (String arg : args) {
+//			try {
+//				port = Integer.parseInt(arg);
+//			} catch (NumberFormatException e) {
+//				e.printStackTrace();
+//				System.out.println("Error when parsing port: " + arg);
+//				return;
+//			}
+//
+//			System.out.print("connecting on port " + port + "...     ");
+//			if (!bridge.connect(port)) {
+//				//error!
+//				return;
+//			}
+//			System.out.println("done!");
+//		}
 
 		System.out.println("Bridge initialized!");
 		bridge.start();
@@ -79,7 +181,7 @@ public class Bridge extends Thread {
 	 */
 	private static void usage() {
 		System.out.println("Usage:");
-		System.out.println("java -jar bridge.jar port1 [port2] [port3] [...]");
+		System.out.println("java -jar bridge.jar bridgeconf.conf numberOfConnections");
 	}
 	
 	
@@ -88,74 +190,74 @@ public class Bridge extends Thread {
 	
 	public Bridge() {
 		
-		lookupTable = new HashMap<Byte, Socket>();
-		socketList = new CircularList<Socket>();
-		activeRings = new LinkedList<Socket>();
+		lookupTable = new HashMap<Byte, EmbeddedBridge>();
+		embeddedBridges = new CircularList<EmbeddedBridge>();
+		knownConnections = new LinkedList<EmbeddedBridge>();
 	}
 	
-	@Override
-	public void run() {
+	public void start() {
+		boolean cont = true;
+		while (cont) {
+			try {
+				cont = nextInput();
+			} catch (IOException e) {
+				e.printStackTrace();
+				System.out.println("Encountered an IO Exception when trying to fetch/process input!");
+			}
+			
+//			try {
+//				sleep(10);
+//			} catch (InterruptedException e) {
+//				// TODO Auto-generated catch block
+//				e.printStackTrace();
+//			} //just to give the thread a little break between having nothing.
+		}
+	}
+	
+	private static int parseConfig(String fileName) {
+		File config = new File(fileName);
+		if (!config.exists()) {
+			return -1;
+		}
+		
+		Scanner in;
 		try {
-			nextInput();
-		} catch (IOException e) {
-			e.printStackTrace();
-			System.out.println("Encountered an IO Exception when trying to fetch/process input!");
+			in = new Scanner(config);
+		} catch (FileNotFoundException e) {
+			System.out.println("Unnexpected error occured when opening a scanner over the config!");
+			return -1;
 		}
+		
+		int p = in.nextInt();
+		in.close();
+		return p;
 	}
 	
-	protected boolean connect(int port) {
-		Socket sock;
-		
-		try {
-			sock = new Socket("127.0.0.1", port);
-		} catch (UnknownHostException e) {
-			e.printStackTrace();
-			System.out.println("Encountered an Unknown Host Exception!");
-			return false;
-		} catch (IOException e) {
-			e.printStackTrace();
-			System.out.println("Error when trying to connect on port " + port);
-			return false;
-		}
-		
-		//everything went okay?
-		
-		//add socket to our list of sockets
-		if (sock != null) { //just incase
-			socketList.add(sock);
-			activeRings.add(sock);
-		}
-		
-		return true;
-	}
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	/*
-	 * TODO: Finish implementing the activeRings list:
-	 * 			Check if it's empty when we get a FINISH message
-	 * TODO: Check if messages from source 0 are bridge messages, and deal with them
-	 */
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
+//	protected boolean connect(int port) {
+//		Socket sock;
+//		
+//		try {
+//			sock = new Socket("127.0.0.1", port);
+//		} catch (UnknownHostException e) {
+//			e.printStackTrace();
+//			System.out.println("Encountered an Unknown Host Exception!");
+//			return false;
+//		} catch (IOException e) {
+//			e.printStackTrace();
+//			System.out.println("Error when trying to connect on port " + port);
+//			return false;
+//		}
+//		
+//		//everything went okay?
+//		
+//		//add socket to our list of sockets
+//		if (sock != null) { //just incase
+//			embeddedBridges.add(sock);
+//			outputSockets.add(sock);
+//		}
+//		
+//		return true;
+//	}
 	
 	
 	
@@ -166,14 +268,14 @@ public class Bridge extends Thread {
 	 * </p>
 	 * @throws IOException Error occurs when trying to fetch an input stream
 	 */
-	private void nextInput() throws IOException {
-		if (socketList == null) {
+	private boolean nextInput() throws IOException {
+		if (embeddedBridges == null) {
 			System.out.println("Invalid call to nextInput in bridge! List is null!");
-			return;
+			return true;
 		}
 		
-		if (socketList.isEmpty()) {
-			return;
+		if (embeddedBridges.isEmpty()) {
+			return true;
 		}
 		
 		Socket sock = null;
@@ -183,9 +285,16 @@ public class Bridge extends Thread {
 		//out list is. That's all handled in the CircularList class. Instead, we just call 'next' up to
 		//<i>size</i> times looking for a socket with a frame ready to process. This will stop us from
 		//looping infinitely until we get a frame!
-		for (int i = 0; i < socketList.size(); i++) {
-			sock = socketList.next();
-			if (sock.getInputStream().available() < Frame.headerLength) {
+		EmbeddedBridge bridge = null;
+		for (int i = 0; i < embeddedBridges.size(); i++) {
+			bridge = embeddedBridges.next();
+			sock = bridge.inputSocket;
+			int size = sock.getReceiveBufferSize();
+			int avail = sock.getInputStream().available();
+//			if (size-avail < 50) {
+//				System.out.println("Buffer for socket: " + sock + " getting full (" + avail + " / " + size + ")");
+//			}
+			if (avail < Frame.headerLength) {
 				//not ready to be looked at, so move on
 				sock = null;
 				continue;
@@ -197,12 +306,15 @@ public class Bridge extends Thread {
 		
 		if (sock == null) {
 			//went through the whole list once and didn't get any available input;
-			return;
+			return true;
 		}
 		
-		byte[] frame = getFrame(sock);
-		processFrame(sock, frame);
+		byte[] frame = getFrame(sock); 
 		
+		if (bridge == null) {
+			System.out.println("Encountered strange error: unable to match a socket with an embeddedBridge!");
+		}
+		return processFrame(bridge, frame);
 	}
 	
 	/**
@@ -226,7 +338,7 @@ public class Bridge extends Thread {
 		}
 		
 		byte[] header = receive(input, Frame.headerLength);
-		byte[] body = receive(input, Frame.Header.getSize(header) + 1, 200 + (Frame.Header.getSize(header) * 20));
+		byte[] body = receive(input, (Frame.Header.getSize(header) & 0xFF) + 1, 200 + (Frame.Header.getSize(header) * 20));
 		
 		byte[] frame = new byte[header.length + body.length];
 		
@@ -242,22 +354,22 @@ public class Bridge extends Thread {
 	}
 	
 	
-	private void processFrame(Socket returnSocket, byte[] frame) throws IOException {
+	private boolean processFrame(EmbeddedBridge returnBridge, byte[] frame) throws IOException {
 		if (frame == null) {
 			System.out.println("Tried to process a null frame in the bridge!");
-			return;
+			return false;
 		}
 		
 		if (checkFrame(frame)) {
 			//we have a bad frame!
 			System.out.println("Bridge has detected a bad frame!");
-			return;
+			return false;
 		}
 		
 		//First special check: is it a token?
 		if (Frame.Header.isToken(Frame.getHeader(frame))) {
 			//we got a token. Pass it back to the LAN it came from
-			send(returnSocket, frame);
+			send(returnBridge, frame);
 		}
 		
 		//Second special check: Did we (or a monitor) send it? Is it a command frame? Is it from a embedded-bridge?
@@ -270,18 +382,20 @@ public class Bridge extends Thread {
 				 * (see {@link com.smanzana.Project3.Node.Bridge Bridge}
 				 */
 				STDMessage msg = com.smanzana.Project3.Node.Bridge.STDMessage.fromId(data[0]);
+				System.out.println("Got a communication frame: " + msg.name());
 				switch (msg) {
 				case FINISH:
 				default:
-					activeRings.remove(returnSocket); //remove that socket from the list of active rings, if it's there
-					if (activeRings.isEmpty()) {
+					embeddedBridges.remove(returnBridge); //remove that socket from the list of active rings, if it's there
+					if (embeddedBridges.isEmpty()) {
 						//close down the rings
 						byte[] killFrame = assembleFrame(STDMessage.KILL);
 						flood(killFrame);
+						return false;
 					}
 					break;
 				}
-				return;
+				return true;
 			}
 			
 			
@@ -289,28 +403,45 @@ public class Bridge extends Thread {
 			//TODO figure out what the monitor is saying
 			//TODO remove dead nodes from our lookup table
 			//drain it by not retransmitting it
-			return;
+			return true;
 		}
 		
 		//Done with the special checks. We know it isn't a control frame. Instead we just route it and make sure the
 		//source is in our routing table
-		updateRoutingTable(returnSocket, frame);
+		updateRoutingTable(returnBridge, frame);
 		
 		
 		Byte address = Frame.Header.getDestination(Frame.getHeader(frame));
-		Socket output = lookupTable.get(address);
+		
+		//!!!!!!!!!!!!
+		//Set the monitor bit to 0, to avoid silly errors involving a message getting unlucky and passing two monitors
+		//in two different networks before reaching its goal
+		//!!!!!!!!!!!!
+		byte AC = frame[0];
+		if ((AC & 8) != 0) {
+			//something there. Subtract 8 if positive. I hate how everything is signed
+			if (AC > 0) {
+				AC = (byte) (AC - 8);
+			} else {
+				AC = (byte) (AC + 8);
+			}
+		}
+		//AC = (byte) (AC & 247);//XXXX XXXX & 1111 0111 = XXXX 1XXXX  -- set the monitor bit to 0 and leave everything else the same
+		frame[0] = AC;
+		
+		EmbeddedBridge output = lookupTable.get(address);
 		
 		//last check: are we going to move this frame across LANs? If so:
 		//is it an ack? We send out fake ones, so we drain those
 		//do we need to send a fake ack?
-		if (output == null || returnSocket != output) {
+		if (output == null || returnBridge != output) {
 			if (Frame.getFrameStatus(frame) != 0) {
 				//FS other than 0 means this is an ack (or NAK) frame coming back. Drain it.
-				return;
+				return true;
 				//TODO what if it gets rejected?!!?!?!?!
 			}
 			//This is the original frame, so generate a fake ACK for the sender
-			ack(returnSocket, frame);
+			ack(returnBridge, frame);
 		}
 		
 		if (output == null) {
@@ -324,7 +455,7 @@ public class Bridge extends Thread {
 			send(output, frame);
 		}
 		
-		
+		return true;
 		
 	}
 	
@@ -417,16 +548,18 @@ public class Bridge extends Thread {
 	 * @param frame What frame to send through the socket :D
 	 * @throws IOException Error when trying to use the output stream of the socket
 	 */
-	private void send(Socket output, byte[] frame) throws IOException {
+	private void send(EmbeddedBridge output, byte[] frame) throws IOException {
 		if (output == null || frame == null) {
 			System.out.println("Tried to send null frame on null socket!");
 			return;
 		}
 		
-		OutputStream out = output.getOutputStream();
+		OutputStream out = output.outputSocket.getOutputStream();
 		
+		System.out.print("Sending... ");
 		out.write(frame);
 		out.flush();
+		System.out.println("done");
 	}
 	
 	/**
@@ -436,10 +569,12 @@ public class Bridge extends Thread {
 	 * @throws IOException Exception caused when fetching output streams of the sockets
 	 */
 	private void flood(byte[] frame) throws IOException {
-		for (int i = 0; i < socketList.size(); i++) {
-			send(socketList.next(), frame);
+		if (knownConnections.isEmpty()) {
+			System.out.println("Tried to flood a message, but nobody exists to flood to!");
 		}
-		//go through socket list once complete time so we don't mess up our index. Send frame on each socket.
+		for (EmbeddedBridge bridge : knownConnections) {
+			send(bridge, frame);
+		}
 	}
 	
 	/**
@@ -466,8 +601,8 @@ public class Bridge extends Thread {
 	 * @param sock
 	 * @param frame
 	 */
-	private void updateRoutingTable(Socket sock, byte[] frame) {
-		if (sock == null || frame == null) {
+	private void updateRoutingTable(EmbeddedBridge bridge, byte[] frame) {
+		if (bridge == null || frame == null) {
 			return;
 		}
 		
@@ -480,7 +615,7 @@ public class Bridge extends Thread {
 		}
 		
 		//address not registered!
-		lookupTable.put(address,  sock);
+		lookupTable.put(address,  bridge);
 	}
 	
 	/**
@@ -489,16 +624,46 @@ public class Bridge extends Thread {
 	 * @param frame The frame
 	 * @throws IOException If error occurs when trying to send the frame (see {@link #send(Socket, byte[]) send()})
 	 */
-	private void ack(Socket sock, byte[] frame) throws IOException {
+	private void ack(EmbeddedBridge bridge, byte[] frame) throws IOException {
 		//an acknowledgment frame is the same frame with the FS byte changed to 2 -- accepted.
 		byte[] ackFrame = frame.clone(); //if we don't clone, we'll change the frame!!!
 		ackFrame[ackFrame.length - 1] = 2;
-		send(sock, ackFrame);
+		send(bridge, ackFrame);
 	}
 	
 	private byte[] assembleFrame(STDMessage msg) {
+		byte[] frame = new byte[7];
+		//Because this frame is immediately picked up and sorted out by the embedded bridges,
+		//we don't need to worry much about the monitor bits, the token bit/byte, etc.
+		//We only need to worry about:
+		frame[0] = 0;
+		frame[1] = 0;
+		frame[2] = 0;
+		frame[3] = 0; //the source, which we set to 0 as standard
+		frame[4] = 1; //the size
+		frame[5] = msg.id; //our message
+		frame[6] = 0;
 		
-		
-		return null;
+		return frame;
 	}
+	
+//	/**
+//	 * Tries to get an EmbeddedBridge that contains to the passed socket.<br />
+//	 * This method checks both the input and output sockets, so the passed socket can be either and will
+//	 * still return the EmbeddedBridge associated with it.<br />
+//	 * If multiple EmbeddedBridges exist with the same registered sockets, this will only return the first.
+//	 * @param sock
+//	 * @return
+//	 */
+//	private EmbeddedBridge getEmbeddedBridge(Socket sock) {
+//		EmbeddedBridge bridge = null;
+//		for (EmbeddedBridge br : knownConnections) {
+//			br = embeddedBridges.next();
+//			if (br.contains(sock)) {
+//				bridge = br;
+//				break;
+//			}
+//		}
+//		return bridge;
+//	}
 }
