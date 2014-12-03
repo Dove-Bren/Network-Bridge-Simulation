@@ -410,6 +410,12 @@ public class Bridge {
 		//source is in our routing table
 		updateRoutingTable(returnBridge, frame);
 		
+		byte FS = Frame.getFrameStatus(frame);
+		if (FS != 0) {
+			//NAK or ACK frame. Ignore cause we lie and produce ACKS
+			return true;
+		}
+		
 		
 		Byte address = Frame.Header.getDestination(Frame.getHeader(frame));
 		
