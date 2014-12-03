@@ -561,11 +561,8 @@ public class Bridge {
 		}
 		
 		OutputStream out = output.outputSocket.getOutputStream();
-		
-		System.out.print("Sending... ");
 		out.write(frame);
 		out.flush();
-		System.out.println("done");
 	}
 	
 	/**
